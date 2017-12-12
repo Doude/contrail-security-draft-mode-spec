@@ -90,12 +90,43 @@ The Contrail model will be modify:
    That flag determines which security resources were delete for audit and
    commit.
 
+4. Add a link from each of the five security resources to a draft resource of
+   same type
+
+   That permits to identify if a security resource have pending modifications.
+
 For users no much changes, they will continue to use API to work with enforced
 security resources. New API calls will permit to identify modified security
 resources and to commit or revert them:
 
 1. List pending modified security resources per scope
 2. Commit or revert modified security resources per scope
+
+On the API server side, few tasks are added:
+
+* Commit modifications:
+
+  * For added security resources, we just remove the `draft` flag.
+
+  * For updated security resources, the referenced draft resource will be
+    updated with the FQ name and UUID of the original resource and the original
+    is purge.
+
+  * For delete security resource, the resource with the flag `to_delete` will be
+    purge.
+
+* Abandon/revert modifications
+
+  All security resources of the scope with the flag `draft` will be removed and
+  all security resources `to_delete` flag reset to false.
+
+* Lock security modifications when commit or revert is in progress
+
+  A zookeeper lock will permits to know if a commit or a revert is in progress
+  and return 409 errors to any security modifications. If a commit or a revert
+  is in progress, the new draft API to list security modifications will return a
+  empty list and the API call to do a commit or a revert will be block (returns
+  409).
 
 ## 3.3 User workflow impact
 
@@ -110,7 +141,7 @@ See introduction in 3.
 
 # 4. Implementation
 ## 4.1 Work items
-#### Describe changes needed for different components such as Controller, Analytics, Agent, UI. 
+#### Describe changes needed for different components such as Controller, Analytics, Agent, UI.
 #### Add subsections as needed.
 
 # 5. Performance and scaling impact
