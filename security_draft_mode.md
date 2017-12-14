@@ -1,65 +1,79 @@
 
 # 1. Introduction
 
-Allow to define if security modification in a scope (global or project) should
+Allow to define if security modifications in a scope (global or project) should
 be applied directly or have to be audited by a tier team/person before enforce
 them.
 
 # 2. Problem statement
 
-Some organizations needs to audit and validate any security before allowing
-them.
+Some organizations needs to audit and validate any security policy modifications
+before allowing them.
 
 # 3. Proposed solution
 
-Introduce a security draft mode at the scope level that determine if any
+Introduce a security policy draft mode at the scope level that determines if any
 modifications on the five security resources should be directly enforce or not.
-If security needs to be audited, three cases can happen:
+If security policies needs to be modified, three cases can happen:
 
-1. The modification create a new security resource
+1. Modifications create new security resources
 
-   In that case, we create that new security resource with a draft flag set to
-   True. All reference are created and identical to a normal resource.
+   In that case, Contrail creates that new security resources as a child of a
+   scoped dedicated policy management resource with all defined properties and
+   references. That new security resource is not enforced and does not change
+   data path.
 
-   Followed modification on that created security resource will be append to it.
+   Followed modification on that created security resource will be apply to that
+   draft version and not enforced on the the data path.
 
-2. The modification update an exiting security resource
+2. Modification update on exiting security resources
 
-   Here, we clone the security resource, set the draft flag, reference it with
-   the original resource and apply modifications on that cloned resource. The
-   clone also copy references and parent link, that permits to not remove a
-   resource (e.g. tag) if a pending security resource reference it.
+   Here, Contrail clones concerned security resources, as a child of the same
+   scoped dedicated policy management resource and apply modifications on that
+   cloned resource. That modified security resource is not enforced and does not
+   change data path. The clone also copies references and parent link, that
+   permits to not remove a resource (e.g. tag) if a pending security resource
+   reference it.
 
-   If the user modify the a security resource in multiple state, Contrail will
-   append modifications on the same cloned resource.
+   Then if the user modifies that security resource again, Contrail continues to
+   append modifications on the same cloned resource and modification still not
+   enforced on the the data path.
 
-3. The modification remove a security resource
+3. Modifications remove security resources
 
-   In that case, we mark the security resource as 'to delete'. Don't touch
-   links.
+   In that case, Contrail clones concerned security resources, as a child of the
+   scoped dedicated policy management resource and it marks the security
+   resource as *'to delete'*.
 
-   Later, if the user decides to not remove the resource, the flag should be
-   reset.
+   All modifications on that *'to delete'* resource should be forbidden.
 
-After, the security team/person, can review that proposed security modification
-thanks to new REST API calls to list and show them. Security team/person have
+   Later, if the user decides to not remove the resource, the only way to do
+   that is to revert all pending modifications.
+
+After, a team/person in charge of the security, can review that pending security
+modifications thanks to new REST API calls to list and show them and then have
 two choices:
 
-1. Commit modifications
+1. commit modifications:
 
    When security resource modifications were validated and ready to be enforced,
    the security team/person can commit them. In that first version, the commit
    granularity will be limited to the scope. When a commit is on going, no more
    security modifications are allowed.
 
-2. Abandon modifications
+2. abandon modifications:
 
    When security resource modifications were not validated, the security
    team/person can abandon them. In that first version, the abandon/revert
    granularity will be limited to the scope. When an abandon/revert is on going,
    no more security modifications are allowed.
 
+The Contrail API will be enhance with a filter that permits to get the original
+of the modified security resource version if the resource have some pending
+modifications.
+
 The five security resources are:
+
 * Application Policy Set
 * Firewall Policy
 * Firewall Rule
@@ -72,53 +86,97 @@ None
 
 ## 3.2 API schema changes
 
-The Contrail model will be modify:
+There is two possible scopes:
 
-1. Add `allow_security_modification` in scope resources
+* **global** level which is own by the global default `policy-management`
+  resource,
+* and at the **project** level which is own by a `project` resources.
 
-   Add a flag to security scopes resources, aka. *Policy Management* and
-   *Project* to know if security resource modifications in that scope should be
-   directly enforce or not.
+All draft clones of a security resources will be a child of dedicated policy
+management resource which belongs to the scope:
 
-2. Add `draft` flag to the five security resources
+* for global scoped, its `fq_name` is `draft-policy-management`,
+* and for project scope its `fq_name` is construct with the project `fq_name`
+  with `draft` string appended (e.g. `default-domain:projectX:draft`) as usual.
 
-   That flag permits to know which security resources were created/modified for
-   for audit and commit.
+Draft clones will have the same name as the original resource but have a
+different and unique UUID.
 
-3. Add `to_delete` flag to the five security resources
+The Contrail model will be modify accordingly:
 
-   That flag determines which security resources were delete for audit and
-   commit.
+1. add `enable_security_policy_draft` in scope resources,
 
-4. Add a link from each of the five security resources to a draft resource of
-   same type
+   For the global scope, that properties will be added to the
+   `global-system-config` resource and to the `project` resource for the
+   project scope. If the flag is true, all security policy modifications will
+   not be enforce until an authorized person/team approve and commit it, if it's
+   false, all modifications will be enforce directly.
 
-   That permits to identify if a security resource have pending modifications.
+2. add `to_delete` flag to the five security resources,
+
+   That flag determines which security resources will be deleted on a commit.
 
 For users no much changes, they will continue to use API to work with enforced
 security resources. New API calls will permit to identify modified security
 resources and to commit or revert them:
 
-1. List pending modified security resources per scope
+1. List pending modified security resources per scope and/or per resource type
+
+  ```
+  GET /security-policy-draft/[<SCOPE_UUID>[?resource_types=firewall-rule,address-group]
+  ```
+
 2. Commit or revert modified security resources per scope
+
+  ```
+  POST /security-policy-draft/[commit|revert]/<SCOPE_UUID>
+  ```
+
+Also, a new filter (boolean named `draft`) for detailed list and show API calls
+will be added to get the committed version or the draft version of a resource.
+That permits to easily determine pending modifications:
+
+  ```
+  GET /firewall-rules?detail=True&daft=True
+  GET /firewall-rule/5f34cc7f-5133-4d9e-bb38-a511f70c32c6?daft=True
+  ```
+
+* `False`: show committed version of the security resource,
+* `True`: show draft version of the security resource,
+* if the security resource does not have any pending modifications, the list or
+  get API calls return the same result regardless of the `draft` filter value,
+* if the resource type is not one of the five security resource, the `draft`
+  filter does not have any effect,
+* finally, if the `draft` filter is not defined in the API GET request, it is
+  considered as false.
 
 On the API server side, few tasks are added:
 
 * Commit modifications:
 
-  * For added security resources, we just remove the `draft` flag.
+  * For added security resources, Contrail calls the
+    `vnc_cfg_api_server.vnc_db.VncDbClient.dbe_create` method with all draft
+    resource version attributes but with the scope as owner:
+      * for the global scope, the owner is the global
+        `default-policy-management` resource,
+      * for the project scope, the owner is the project resource itself.
 
-  * For updated security resources, the referenced draft resource will be
-    updated with the FQ name and UUID of the original resource and the original
-    is purge.
+  * For updated security resources, Contrail calls the
+    `vnc_cfg_api_server.vnc_db.VncDbClient.dbe_update` method with all draft
+    resource version attributes on the original resource version.
 
-  * For delete security resource, the resource with the flag `to_delete` will be
-    purge.
+  * For delete security resource, Contrail finds committed resources
+    corresponding to the draft resource with the flag `to_delete` and calls the
+    `vnc_cfg_api_server.vnc_db.VncDbClient.dbe_delete` on it.
+
+  Finally, when all modifications where applied on the committed resources and
+  enforced on the data path, the scoped and dedicated policy management resource
+  that owns all draft security resources can be purge as well as its children.
 
 * Abandon/revert modifications
 
-  All security resources of the scope with the flag `draft` will be removed and
-  all security resources `to_delete` flag reset to false.
+  The scoped and dedicated policy management resource that owns all draft
+  security resources can be purge as well as its children.
 
 * Lock security modifications when commit or revert is in progress
 
@@ -126,7 +184,9 @@ On the API server side, few tasks are added:
   and return 409 errors to any security modifications. If a commit or a revert
   is in progress, the new draft API to list security modifications will return a
   empty list and the API call to do a commit or a revert will be block (returns
-  409).
+  409). Also, list and get API calls with `draft` filter set to true, return the
+  draft version if a commit is in progress or the original version is a revert
+  is in progress.
 
 ## 3.3 User workflow impact
 
